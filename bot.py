@@ -1,5 +1,6 @@
 # main.py
 import os
+import re
 import asyncio
 import logging
 from dotenv import load_dotenv
@@ -51,6 +52,33 @@ except ValueError:
     logging.error("DISCORD_CHANNEL_ID 格式错误。请确保它是一个纯数字。")
     exit()
 
+DISCORD_AIRDROP_CHANNEL_ID_STR = os.getenv('DISCORD_AIRDROP_CHANNEL_ID')
+
+if not DISCORD_AIRDROP_CHANNEL_ID_STR:
+    logging.warning("DISCORD_AIRDROP_CHANNEL_ID 未设置，空投频道转发功能将被禁用。")
+    DISCORD_AIRDROP_CHANNEL_ID = None
+else:
+    try:
+        DISCORD_AIRDROP_CHANNEL_ID = int(DISCORD_AIRDROP_CHANNEL_ID_STR)
+        logging.info(f"空投专用转发频道 ID: {DISCORD_AIRDROP_CHANNEL_ID}")
+    except ValueError:
+        logging.error("DISCORD_AIRDROP_CHANNEL_ID 格式错误。")
+        DISCORD_AIRDROP_CHANNEL_ID = None
+
+DISCORD_TRADE_CHANNEL_ID_STR = os.getenv('DISCORD_TRADE_CHANNEL_ID')
+
+if not DISCORD_TRADE_CHANNEL_ID_STR:
+    logging.warning("DISCORD_AIRDROP_CHANNEL_ID 未设置，空投频道转发功能将被禁用。")
+    DISCORD_TRADE_CHANNEL_ID = None
+else:
+    try:
+        DISCORD_TRADE_CHANNEL_ID = int(DISCORD_TRADE_CHANNEL_ID_STR)
+        logging.info(f"合约专用转发频道 ID: {DISCORD_TRADE_CHANNEL_ID}")
+    except ValueError:
+        logging.error("DISCORD_TRADE_CHANNEL_ID 格式错误。")
+        DISCORD_TRADE_CHANNEL_ID = None
+
+
 
 # --- 会话文件路径设置 (Session Path Setup) ---
 SESSION_NAME = 'user_session'
@@ -73,6 +101,17 @@ intents.message_content = True
 discord_client = discord.Client(intents=intents)
 
 
+# --- 重点字段 ----
+AIRDROP_FILTER_KEYWORDS = ["空投", "交易挑战", "瓜分"]
+PATTERN = r"上线\w+U本位永续合约"
+
+
+# --- 把 Markdown 链接转为裸链接 ----
+def convert_markdown_links_to_plain_urls(text: str) -> str:
+    # 将 [文字](链接) 替换为 文字 + 空格 + 链接
+    pattern = r'\[([^\]]+)\]\((https?://[^\)]+)\)'
+    return re.sub(pattern, r'\1 \2', text)
+
 # --- 核心处理函数 ---
 @telegram_client.on(events.NewMessage(chats=TELEGRAM_CHANNELS))
 async def handle_new_telegram_message(event):
@@ -80,6 +119,8 @@ async def handle_new_telegram_message(event):
 
     try:
         discord_channel = discord_client.get_channel(DISCORD_CHANNEL_ID)
+        airdrop_channel = discord_client.get_channel(DISCORD_AIRDROP_CHANNEL_ID)
+        trade_channel = discord_client.get_channel(DISCORD_TRADE_CHANNEL_ID)
         if not discord_channel:
             logging.error(f"[错误] 未能在 Discord 中找到 ID 为 {DISCORD_CHANNEL_ID} 的频道。")
             return
@@ -91,10 +132,31 @@ async def handle_new_telegram_message(event):
         message_text = event.message.text
         
         if message_text:
-            full_message = forward_header + message_text
+            cleaned_message_text = convert_markdown_links_to_plain_urls(message_text)
+            full_message = forward_header + cleaned_message_text
             logging.info("检测到文本消息，准备转发...")
             await discord_channel.send(full_message)
             logging.info("[成功] 文本消息已成功转发到 Discord。")
+            # 检查是否需要转发到空投频道
+            if DISCORD_AIRDROP_CHANNEL_ID and any(
+                    keyword.lower() in cleaned_message_text.lower() for keyword in AIRDROP_FILTER_KEYWORDS):
+                logging.info(f"[匹配] 检测到关键词，额外转发到空投频道 ({DISCORD_AIRDROP_CHANNEL_ID})")
+                if airdrop_channel:
+                    await airdrop_channel.send(full_message)
+                else:
+                    logging.error(f"[错误] 未能在 Discord 中找到 ID 为 {DISCORD_AIRDROP_CHANNEL_ID} 的空投频道。")
+
+            # 检测是否需要发送到合约频道
+            if DISCORD_TRADE_CHANNEL_ID and re.search(PATTERN, cleaned_message_text):
+                logging.info("[匹配] 检测到上线U本位永续合约消息，准备额外转发到 C 频道")
+                if trade_channel:
+                    # processed = process_msg(cleaned_message_text)
+                    processed_message = forward_header + cleaned_message_text
+                    await trade_channel.send(processed_message)
+                else:
+                    logging.error(f"[错误] 未能在 Discord 中找到 ID 为 {DISCORD_TRADE_CHANNEL_ID} 的频道。")
+                
+
         
         if event.message.media:
             logging.info("检测到媒体文件，准备处理...")
