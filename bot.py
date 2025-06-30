@@ -108,9 +108,15 @@ PATTERN = r"上线\w+U本位永续合约"
 
 # --- 把 Markdown 链接转为裸链接 ----
 def convert_markdown_links_to_plain_urls(text: str) -> str:
-    # 将 [文字](链接) 替换为 文字 + 空格 + 链接
+    # 将 [文字](链接) 替换为 文字 + 空格 + 链接. 如果文字和链接相同，则只保留链接.
+    def replace_link(match):
+        text, url = match.groups()
+        if text == url:
+            return url
+        return f'{text} {url}'
+
     pattern = r'\[([^\]]+)\]\((https?://[^\)]+)\)'
-    return re.sub(pattern, r'\1 \2', text)
+    return re.sub(pattern, replace_link, text)
 
 # --- 核心处理函数 ---
 @telegram_client.on(events.NewMessage(chats=TELEGRAM_CHANNELS))
