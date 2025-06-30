@@ -12,24 +12,6 @@ This bot forwards messages from specified Telegram channels to a Discord channel
 - Handles large files by notifying about the failure instead of crashing.
 - Provides clear logging for monitoring and debugging.
 
-## Setup and Installation
-
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/your-username/your-repo-name.git
-    cd your-repo-name
-    ```
-
-2.  **Create a virtual environment and activate it:**
-    ```bash
-    python3 -m venv venv
-    source venv/bin/activate
-    ```
-
-3.  **Install the dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
 
 ## Configuration
 

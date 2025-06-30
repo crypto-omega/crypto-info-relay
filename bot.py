@@ -6,6 +6,7 @@ import logging
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 import discord
+from urllib.parse import urlparse
 
 # --- 日志设置 ---
 logging.basicConfig(
@@ -35,6 +36,18 @@ for channel in channels_input:
     except ValueError:
         TELEGRAM_CHANNELS.append(channel)
 logging.info(f"将要监控的 Telegram 频道: {TELEGRAM_CHANNELS}")
+
+DESTINATION_TELEGRAM_GROUP_ID_STR = os.getenv('DESTINATION_TELEGRAM_GROUP_ID')
+DESTINATION_TELEGRAM_GROUP_ID = None
+if DESTINATION_TELEGRAM_GROUP_ID_STR:
+    try:
+        DESTINATION_TELEGRAM_GROUP_ID = int(DESTINATION_TELEGRAM_GROUP_ID_STR)
+        logging.info(f"将要转发到的目标 Telegram 群组 ID: {DESTINATION_TELEGRAM_GROUP_ID}")
+    except ValueError:
+        logging.error("DESTINATION_TELEGRAM_GROUP_ID 格式错误。请确保它是一个纯数字。")
+        DESTINATION_TELEGRAM_GROUP_ID = None
+else:
+    logging.warning("DESTINATION_TELEGRAM_GROUP_ID 未设置，Telegram 群组转发功能将被禁用。")
 
 
 # --- DISCORD 设置 ---
@@ -103,20 +116,40 @@ discord_client = discord.Client(intents=intents)
 
 # --- 重点字段 ----
 AIRDROP_FILTER_KEYWORDS = ["空投", "交易挑战", "瓜分"]
-PATTERN = r"上线\w+U本位永续合约"
+PATTERN = r"上线.*U本位永续合约"
 
 
 # --- 把 Markdown 链接转为裸链接 ----
 def convert_markdown_links_to_plain_urls(text: str) -> str:
-    # 将 [文字](链接) 替换为 文字 + 空格 + 链接. 如果文字和链接相同，则只保留链接.
-    def replace_link(match):
-        text, url = match.groups()
-        if text == url:
-            return url
-        return f'{text} {url}'
+    """
+    将 [文字](链接) 替换为 文字 + 空格 + 链接，并去除链接中的所有查询参数.
+    如果去除参数后的链接与文字相同, 则只保留链接.
 
-    pattern = r'\[([^\]]+)\]\((https?://[^\)]+)\)'
-    return re.sub(pattern, replace_link, text)
+    Args:
+        text: 包含Markdown链接的输入字符串.
+
+    Returns:
+        转换并清理了链接的字符串.
+    """
+    def replace_link(match: re.Match) -> str:
+        """
+        根据匹配对象决定替换逻辑.
+        """
+        link_text = match.group(1)
+        link_url = match.group(2)
+
+        # 1. 去除链接中的参数 (? 以及之后的所有内容)
+        clean_url = link_url.split('?')[0]
+
+        # 2. 如果文字和清理后的链接相同, 则只返回清理后的链接
+        if link_text == clean_url:
+            return clean_url
+        # 否则, 返回 "文字 清理后的链接"
+        else:
+            return f'{link_text} {clean_url}'
+
+    # 使用正则表达式查找所有 [文字](链接) 格式的链接
+    return re.sub(r'\[([^\]]+)\]\(([^)]+)\)', replace_link, text)
 
 # --- 核心处理函数 ---
 @telegram_client.on(events.NewMessage(chats=TELEGRAM_CHANNELS))
@@ -143,9 +176,14 @@ async def handle_new_telegram_message(event):
             logging.info("检测到文本消息，准备转发...")
             await discord_channel.send(full_message)
             logging.info("[成功] 文本消息已成功转发到 Discord。")
+            
+            is_airdrop = DISCORD_AIRDROP_CHANNEL_ID and any(
+                keyword.lower() in cleaned_message_text.lower() for keyword in AIRDROP_FILTER_KEYWORDS
+            )
+            is_trade = DISCORD_TRADE_CHANNEL_ID and re.search(PATTERN, cleaned_message_text)
+
             # 检查是否需要转发到空投频道
-            if DISCORD_AIRDROP_CHANNEL_ID and any(
-                    keyword.lower() in cleaned_message_text.lower() for keyword in AIRDROP_FILTER_KEYWORDS):
+            if is_airdrop:
                 logging.info(f"[匹配] 检测到关键词，额外转发到空投频道 ({DISCORD_AIRDROP_CHANNEL_ID})")
                 if airdrop_channel:
                     await airdrop_channel.send(full_message)
@@ -153,14 +191,22 @@ async def handle_new_telegram_message(event):
                     logging.error(f"[错误] 未能在 Discord 中找到 ID 为 {DISCORD_AIRDROP_CHANNEL_ID} 的空投频道。")
 
             # 检测是否需要发送到合约频道
-            if DISCORD_TRADE_CHANNEL_ID and re.search(PATTERN, cleaned_message_text):
+            if is_trade:
                 logging.info("[匹配] 检测到上线U本位永续合约消息，准备额外转发到 C 频道")
                 if trade_channel:
-                    # processed = process_msg(cleaned_message_text)
                     processed_message = forward_header + cleaned_message_text
                     await trade_channel.send(processed_message)
                 else:
                     logging.error(f"[错误] 未能在 Discord 中找到 ID 为 {DISCORD_TRADE_CHANNEL_ID} 的频道。")
+
+            # 如果是空投或合约消息，并且设置了目标群组，则转发到 Telegram 群组
+            if (is_airdrop or is_trade) and DESTINATION_TELEGRAM_GROUP_ID:
+                try:
+                    logging.info(f"准备将消息转发到 Telegram 群组: {DESTINATION_TELEGRAM_GROUP_ID}")
+                    await telegram_client.forward_messages(DESTINATION_TELEGRAM_GROUP_ID, event.message)
+                    logging.info("[成功] 消息已成功转发到 Telegram 群组。")
+                except Exception as e:
+                    logging.error(f"[错误] 转发消息到 Telegram 群组时发生错误: {e}")
                 
 
         
@@ -204,6 +250,12 @@ async def main():
     
     await telegram_client.start()
     logging.info("--- Telegram 用户端已成功登录 ---")
+    
+    # Pre-caching dialogs to resolve entity errors
+    logging.info("正在加载 Telegram 对话列表以缓存实体...")
+    await telegram_client.get_dialogs()
+    logging.info("对话列表加载完成。")
+
     logging.info(f"监控 {len(TELEGRAM_CHANNELS)} 个 Telegram 频道。")
     
     await asyncio.gather(discord_task, telegram_client.run_until_disconnected())
@@ -214,4 +266,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("程序被手动停止。")
-
