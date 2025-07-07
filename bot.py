@@ -3,10 +3,14 @@ import os
 import re
 import asyncio
 import logging
+from dataclasses import dataclass
+from typing import List, Optional, Union
 from dotenv import load_dotenv
+import yaml
 from telethon import TelegramClient, events
 import discord
 from urllib.parse import urlparse
+from dataclasses_json import dataclass_json
 
 # --- 日志设置 ---
 logging.basicConfig(
@@ -22,20 +26,10 @@ logging.info("成功加载 .env 文件中的环境变量。")
 # --- TELEGRAM 设置 (用户账户模式) ---
 TELEGRAM_API_ID = os.getenv('TELEGRAM_API_ID')
 TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH')
-telegram_channel_ids_str = os.getenv('TELEGRAM_CHANNEL_IDS')
 
-if not all([TELEGRAM_API_ID, TELEGRAM_API_HASH, telegram_channel_ids_str]):
-    logging.error("TELEGRAM_API_ID, TELEGRAM_API_HASH 或 TELEGRAM_CHANNEL_IDS 缺失！请检查 .env 文件。")
+if not all([TELEGRAM_API_ID, TELEGRAM_API_HASH]):
+    logging.error("TELEGRAM_API_ID 或 TELEGRAM_API_HASH 缺失！请检查 .env 文件。")
     exit()
-
-channels_input = [item.strip() for item in telegram_channel_ids_str.split(',')]
-TELEGRAM_CHANNELS = []
-for channel in channels_input:
-    try:
-        TELEGRAM_CHANNELS.append(int(channel))
-    except ValueError:
-        TELEGRAM_CHANNELS.append(channel)
-logging.info(f"将要监控的 Telegram 频道: {TELEGRAM_CHANNELS}")
 
 DESTINATION_TELEGRAM_GROUP_ID_STR = os.getenv('DESTINATION_TELEGRAM_GROUP_ID')
 DESTINATION_TELEGRAM_GROUP_ID = None
@@ -151,118 +145,241 @@ def convert_markdown_links_to_plain_urls(text: str) -> str:
     # 使用正则表达式查找所有 [文字](链接) 格式的链接
     return re.sub(r'\[([^\]]+)\]\(([^)]+)\)', replace_link, text)
 
-# --- 核心处理函数 ---
-@telegram_client.on(events.NewMessage(chats=TELEGRAM_CHANNELS))
-async def handle_new_telegram_message(event):
-    logging.info(f"--- [事件触发] 从 Telegram 频道: {event.chat.title if event.chat else event.chat_id} 收到新消息 ---")
+# --- 数据模型 ---
+@dataclass_json
+@dataclass
+class Source:
+    type: str
+    channel_ids: List[Union[int, str]]
+
+@dataclass_json
+@dataclass
+class Filter:
+    type: str
+    words: Optional[List[str]] = None
+    pattern: Optional[str] = None
+
+@dataclass_json
+@dataclass
+class Destination:
+    type: str
+    channel_id: Optional[int] = None
+    group_id: Optional[int] = None
+
+@dataclass_json
+@dataclass
+class Rule:
+    name: str
+    source: Source
+    filters: List[Filter]
+    destinations: List[Destination]
+
+@dataclass_json
+@dataclass
+class Config:
+    rules: List[Rule]
+
+def load_config(config_path: str) -> Config:
+    """从YAML文件加载配置"""
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config_dict = yaml.safe_load(f)
+    return Config.from_dict(config_dict)
+
+def check_message_matches_filter(message_text: str, filter_config: Filter) -> bool:
+    """检查消息是否匹配过滤器规则"""
+    if filter_config.type == "ALL":
+        return True
+    elif filter_config.type == "keywords" and filter_config.words:
+        return any(word.lower() in message_text.lower() for word in filter_config.words)
+    elif filter_config.type == "regex" and filter_config.pattern:
+        return bool(re.search(filter_config.pattern, message_text))
+    return False
+
+def get_matching_destinations(message_text: str, rule: Rule) -> List[Destination]:
+    """获取匹配规则的目标渠道列表"""
+    for filter_config in rule.filters:
+        if check_message_matches_filter(message_text, filter_config):
+            return rule.destinations
+    return []
+
+
+# --- 全局变量 ---
+CONFIG: Optional[Config] = None
+discord_client: Optional[discord.Client] = None
+telegram_client: Optional[TelegramClient] = None
+
+# --- 消息处理函数 ---
+async def forward_to_discord(message_text: str, media_path: Optional[str], 
+                           channel_id: int, source_title: str) -> None:
+    """转发消息到Discord"""
+    channel = discord_client.get_channel(channel_id)
+    if not channel:
+        logging.error(f"[错误] 未能在 Discord 中找到 ID 为 {channel_id} 的频道。")
+        return
+
+    forward_header = f"**【消息来源: {source_title}】**\n\n"
+    
+    if message_text:
+        full_message = forward_header + convert_markdown_links_to_plain_urls(message_text)
+        await channel.send(full_message)
+        logging.info(f"[成功] 文本消息已转发到 Discord 频道 {channel_id}")
+
+    if media_path:
+        if not message_text:
+            await channel.send(forward_header)
+        try:
+            with open(media_path, 'rb') as f:
+                discord_file = discord.File(f)
+                await channel.send(file=discord_file)
+            logging.info(f"[成功] 媒体文件已转发到 Discord 频道 {channel_id}")
+        except discord.errors.HTTPException as e:
+            if e.status == 413:
+                file_size_mb = os.path.getsize(media_path) / (1024 * 1024)
+                logging.error(f"[错误] 文件转发失败！文件大小 ({file_size_mb:.2f} MB) 超过限制。")
+                await channel.send(f"**【转发失败】**\n来自 **{source_title}** 的文件过大，无法上传。")
+            else:
+                logging.error(f"[错误] 上传文件到 Discord 时发生 HTTP 错误: {e}")
+
+async def forward_to_telegram(message: events.NewMessage.Event, group_id: int) -> None:
+    """转发消息到Telegram群组"""
+    try:
+        await telegram_client.forward_messages(group_id, message)
+        logging.info(f"[成功] 消息已转发到 Telegram 群组 {group_id}")
+    except Exception as e:
+        logging.error(f"[错误] 转发消息到 Telegram 群组 {group_id} 时发生错误: {e}")
+
+async def handle_new_telegram_message(event: events.NewMessage.Event) -> None:
+    """处理新的Telegram消息"""
+    if not CONFIG:
+        logging.error("配置未加载，无法处理消息")
+        return
+
+    # 更健壮地获取 source_title
+    if event.chat:
+        if hasattr(event.chat, "title") and event.chat.title:
+            source_title = event.chat.title
+        elif hasattr(event.chat, "username") and event.chat.username:
+            source_title = event.chat.username
+        elif hasattr(event.chat, "first_name") or hasattr(event.chat, "last_name"):
+            source_title = f"{getattr(event.chat, 'first_name', '')} {getattr(event.chat, 'last_name', '')}".strip()
+        else:
+            source_title = f"ID: {event.chat_id}"
+    else:
+        source_title = f"ID: {event.chat_id}"
+    message_text = event.message.text
+    media_path = None
+
+    logging.info(f"收到来自 {source_title} 的新消息")
+
+    if event.message.media:
+        media_path = await event.message.download_media()
+        logging.info(f"媒体文件已下载到: {media_path}")
 
     try:
-        discord_channel = discord_client.get_channel(DISCORD_CHANNEL_ID)
-        airdrop_channel = discord_client.get_channel(DISCORD_AIRDROP_CHANNEL_ID)
-        trade_channel = discord_client.get_channel(DISCORD_TRADE_CHANNEL_ID)
-        if not discord_channel:
-            logging.error(f"[错误] 未能在 Discord 中找到 ID 为 {DISCORD_CHANNEL_ID} 的频道。")
-            return
+        for rule in CONFIG.rules:
+            if event.chat_id not in rule.source.channel_ids:
+                continue
 
-        channel_title = event.chat.title if event.chat else f"ID: {event.chat_id}"
-        logging.info(f"消息来源频道: '{channel_title}'")
+            destinations = get_matching_destinations(message_text or "", rule)
+            for dest in destinations:
+                if dest.type == "discord" and dest.channel_id:
+                    await forward_to_discord(message_text, media_path, 
+                                          dest.channel_id, source_title)
+                elif dest.type == "telegram" and dest.group_id:
+                    await forward_to_telegram(event.message, dest.group_id)
 
-        forward_header = f"**【消息来源: {channel_title}】**\n\n"
-        message_text = event.message.text
-        
-        if message_text:
-            cleaned_message_text = convert_markdown_links_to_plain_urls(message_text)
-            full_message = forward_header + cleaned_message_text
-            logging.info("检测到文本消息，准备转发...")
-            await discord_channel.send(full_message)
-            logging.info("[成功] 文本消息已成功转发到 Discord。")
-            
-            is_airdrop = DISCORD_AIRDROP_CHANNEL_ID and any(
-                keyword.lower() in cleaned_message_text.lower() for keyword in AIRDROP_FILTER_KEYWORDS
-            )
-            is_trade = DISCORD_TRADE_CHANNEL_ID and re.search(PATTERN, cleaned_message_text)
+    finally:
+        if media_path and os.path.exists(media_path):
+            os.remove(media_path)
+            logging.info(f"清理临时文件: {media_path}")
 
-            # 检查是否需要转发到空投频道
-            if is_airdrop:
-                logging.info(f"[匹配] 检测到关键词，额外转发到空投频道 ({DISCORD_AIRDROP_CHANNEL_ID})")
-                if airdrop_channel:
-                    await airdrop_channel.send(full_message)
-                else:
-                    logging.error(f"[错误] 未能在 Discord 中找到 ID 为 {DISCORD_AIRDROP_CHANNEL_ID} 的空投频道。")
+# --- 初始化函数 ---
+async def initialize_clients():
+    """初始化 Telegram 和 Discord 客户端"""
+    global telegram_client, discord_client, CONFIG
 
-            # 检测是否需要发送到合约频道
-            if is_trade:
-                logging.info("[匹配] 检测到上线U本位永续合约消息，准备额外转发到 C 频道")
-                if trade_channel:
-                    processed_message = forward_header + cleaned_message_text
-                    await trade_channel.send(processed_message)
-                else:
-                    logging.error(f"[错误] 未能在 Discord 中找到 ID 为 {DISCORD_TRADE_CHANNEL_ID} 的频道。")
-
-            # 如果是空投或合约消息，并且设置了目标群组，则转发到 Telegram 群组
-            if (is_airdrop or is_trade) and DESTINATION_TELEGRAM_GROUP_ID:
-                try:
-                    logging.info(f"准备将消息转发到 Telegram 群组: {DESTINATION_TELEGRAM_GROUP_ID}")
-                    await telegram_client.forward_messages(DESTINATION_TELEGRAM_GROUP_ID, event.message)
-                    logging.info("[成功] 消息已成功转发到 Telegram 群组。")
-                except Exception as e:
-                    logging.error(f"[错误] 转发消息到 Telegram 群组时发生错误: {e}")
-                
-
-        
-        if event.message.media:
-            logging.info("检测到媒体文件，准备处理...")
-            if not message_text:
-                await discord_channel.send(forward_header)
-
-            logging.info("开始从 Telegram 下载媒体文件...")
-            file_path = await event.message.download_media()
-            logging.info(f"媒体文件已成功下载到: {file_path}")
-
-            try:
-                logging.info("开始向 Discord 上传文件...")
-                with open(file_path, 'rb') as f:
-                    discord_file = discord.File(f)
-                    await discord_channel.send(file=discord_file)
-                logging.info("[成功] 媒体文件已成功转发到 Discord。")
-            except discord.errors.HTTPException as e:
-                if e.status == 413:
-                    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                    logging.error(f"[错误] 文件转发失败！文件大小 ({file_size_mb:.2f} MB) 可能超过了 Discord 的限制。")
-                    await discord_channel.send(f"**【转发失败】**\n来自 **{channel_title}** 的文件过大，无法上传。")
-                else:
-                    logging.error(f"[错误] 上传文件到 Discord 时发生 HTTP 错误: {e}")
-            finally:
-                logging.info(f"清理本地临时文件: {file_path}")
-                os.remove(file_path)
-
+    # 加载配置
+    try:
+        CONFIG = load_config('config.yaml')
+        logging.info("成功加载配置文件")
     except Exception as e:
-        logging.exception(f"[严重错误] 在处理消息转发时发生未知异常: {e}")
+        logging.error(f"加载配置文件失败: {e}")
+        return False
 
+    # 初始化 Discord 客户端
+    intents = discord.Intents.default()
+    intents.message_content = True
+    discord_client = discord.Client(intents=intents)
 
-@discord_client.event
-async def on_ready():
-    logging.info(f"--- Discord Bot 已准备就绪 (Logged in as {discord_client.user}) ---")
-    logging.info("机器人现在可以转发消息了。")
+    # 初始化 Telegram 客户端
+    SESSION_NAME = 'user_session'
+    SESSION_PATH = os.getenv('SESSION_PATH', '.')
+    full_session_path = os.path.join(SESSION_PATH, SESSION_NAME)
+
+    telegram_client = TelegramClient(
+        full_session_path,
+        int(os.getenv('TELEGRAM_API_ID')),
+        os.getenv('TELEGRAM_API_HASH')
+    )
+
+    # 设置事件处理器
+    telegram_client.add_event_handler(
+        handle_new_telegram_message,
+        events.NewMessage()
+    )
+
+    @discord_client.event
+    async def on_ready():
+        logging.info(f"Discord Bot 已登录为 {discord_client.user}")
+
+    return True
 
 async def main():
-    discord_task = asyncio.create_task(discord_client.start(DISCORD_BOT_TOKEN))
-    
-    await telegram_client.start()
-    logging.info("--- Telegram 用户端已成功登录 ---")
-    
-    # Pre-caching dialogs to resolve entity errors
-    logging.info("正在加载 Telegram 对话列表以缓存实体...")
-    await telegram_client.get_dialogs()
-    logging.info("对话列表加载完成。")
+    """主程序入口"""
+    # 加载环境变量
+    load_dotenv()
 
-    logging.info(f"监控 {len(TELEGRAM_CHANNELS)} 个 Telegram 频道。")
-    
-    await asyncio.gather(discord_task, telegram_client.run_until_disconnected())
+    # 检查必要的环境变量
+    required_env_vars = ['TELEGRAM_API_ID', 'TELEGRAM_API_HASH', 'DISCORD_BOT_TOKEN']
+    if not all(os.getenv(var) for var in required_env_vars):
+        logging.error("缺少必要的环境变量，请检查 .env 文件")
+        return
 
+    # 初始化客户端
+    if not await initialize_clients():
+        return
+
+    try:
+        # 启动客户端
+        discord_task = asyncio.create_task(
+            discord_client.start(os.getenv('DISCORD_BOT_TOKEN'))
+        )
+        
+        await telegram_client.start()
+        logging.info("Telegram 客户端已登录")
+        
+        # 预加载对话列表
+        await telegram_client.get_dialogs()
+        logging.info("Telegram 对话列表已加载")
+
+        # 运行直到断开连接
+        await asyncio.gather(
+            discord_task,
+            telegram_client.run_until_disconnected()
+        )
+    except Exception as e:
+        logging.error(f"运行时发生错误: {e}")
+    finally:
+        # 清理资源
+        if telegram_client and telegram_client.is_connected():
+            await telegram_client.disconnect()
+        if discord_client and not discord_client.is_closed():
+            await discord_client.close()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         logging.info("程序被手动停止。")
+    except Exception as e:
+        logging.error(f"程序异常退出: {e}")

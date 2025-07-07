@@ -1,3 +1,5 @@
 python-dotenv
 telethon
 discord.py
+pyyaml
+dataclasses-json

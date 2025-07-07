@@ -1,0 +1,39 @@
+# Forward Rules Configuration Example
+rules:
+  - name: "交易日志转发规则"
+    source:
+      type: "telegram"
+      channel_ids: [REPLACE_WITH_CHANNEL_ID_1, REPLACE_WITH_CHANNEL_ID_2]
+    filters:
+      - type: "ALL"
+    destinations:
+      - type: "discord"
+        channel_id: REPLACE_WITH_DISCORD_CHANNEL_ID
+      - type: "telegram"
+        group_id: REPLACE_WITH_TELEGRAM_GROUP_ID
+
+  - name: "空投转发规则"
+    source:
+      type: "telegram"
+      channel_ids: [REPLACE_WITH_CHANNEL_ID]
+    filters:
+      - type: "keywords"
+        words: ["空投", "交易挑战", "瓜分"]
+    destinations:
+      - type: "discord"
+        channel_id: REPLACE_WITH_DISCORD_AIRDROP_CHANNEL_ID
+      - type: "telegram"
+        group_id: REPLACE_WITH_TELEGRAM_GROUP_ID
+
+  - name: "合约转发规则"
+    source:
+      type: "telegram"
+      channel_ids: [REPLACE_WITH_CHANNEL_ID]
+    filters:
+      - type: "regex"
+        pattern: "上线.*U本位永续合约"
+    destinations:
+      - type: "discord"
+        channel_id: REPLACE_WITH_DISCORD_TRADE_CHANNEL_ID
+      - type: "telegram"
+        group_id: REPLACE_WITH_TELEGRAM_GROUP_ID
