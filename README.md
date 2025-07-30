@@ -11,6 +11,11 @@ This bot forwards messages from specified Telegram channels to a Discord channel
 - Forwards the filtered (airdrop/trade) messages to a specified Telegram group.
 - Handles large files by notifying about the failure instead of crashing.
 - Provides clear logging for monitoring and debugging.
+-  Scrapes Gate.io official announcements and posts filtered results to Discord.
+- Filters announcements by keyword list (e.g., "gate alpha", "xstocks", "launchpool").
+- Supports proxy settings for accessing Gate.io with Selenium.
+- Avoids duplicate posts using a local cache file.
+- Only posts during specified hours (e.g., 08:00 to 24:00).
 
 
 ## Configuration
@@ -37,6 +42,19 @@ DESTINATION_TELEGRAM_GROUP_ID=your_telegram_group_id
 # Optional: Path to save the telethon session file
 # Defaults to the current directory if not set
 SESSION_PATH=/path/to/your/session/folder
+
+# Gate announcement scraper config
+DISCORD_ANNOUNCEMENTS_CHANNEL_ID=your_gate_announcement_channel_id
+KEYWORDS=gate alpha, xstocks, launchpool          # 🆕 comma-separated keywords to filter Gate announcements
+
+# Local cache file for preventing duplicate announcements
+DISCORD_SESSION_PATH=./sent_links.txt
+
+# Proxy settings for Selenium (optional)
+USE_PROXY=true
+PROXY_HOST=127.0.0.1
+PROXY_PORT=7890
+
 ```
 
 ### How to get the credentials:
@@ -52,6 +70,7 @@ SESSION_PATH=/path/to/your/session/folder
 
 ## Usage
 
+### Telegram-to-Discord Forwarder
 Once the setup and configuration are complete, run the bot with the following command:
 
 ```bash
@@ -59,3 +78,30 @@ python bot.py
 ```
 
 The bot will log in to both Telegram and Discord and start forwarding messages.
+
+### Gate.io Announcements Scraper
+```bash
+python discord_gate_bot.py
+```
+
+### This will:
+
+- Launch a headless Chrome browser via Selenium.
+
+- Scrape the latest Gate.io announcements periodically (default every 5 minutes).
+
+- Filter based on keywords.
+
+- Send matched announcements to a Discord channel.
+
+- Avoid duplicate posts using a local cache file.
+
+- Run only during configured hours (default: 08:00–24:00).
+
+### **Additional Notes**
+
+- The Gate scraper uses Selenium with ChromeDriver. Make sure you have the correct version of ChromeDriver installed and available in your system PATH.
+
+- Proxy usage can be disabled by setting USE_PROXY=false.
+
+- ou can run both bots in parallel (e.g., in two separate terminal sessions or via tmux/supervisor).
