@@ -110,14 +110,13 @@ discord_client = discord.Client(intents=intents)
 
 # --- 重点字段 ----
 AIRDROP_FILTER_KEYWORDS = ["空投", "交易挑战", "瓜分"]
-PATTERN = r"上线.*U本位永续合约"
+PATTERN = r"上线.*永续合约"
 
 
 # --- 把 Markdown 链接转为裸链接 ----
 def convert_markdown_links_to_plain_urls(text: str) -> str:
     """
-    将 [文字](链接) 替换为 文字 + 空格 + 链接，并去除链接中的所有查询参数.
-    如果去除参数后的链接与文字相同, 则只保留链接.
+    将 [文字](链接) 替换为链接，并去除链接中的所有查询参数.
 
     Args:
         text: 包含Markdown链接的输入字符串.
@@ -129,18 +128,11 @@ def convert_markdown_links_to_plain_urls(text: str) -> str:
         """
         根据匹配对象决定替换逻辑.
         """
-        link_text = match.group(1)
         link_url = match.group(2)
 
         # 1. 去除链接中的参数 (? 以及之后的所有内容)
         clean_url = link_url.split('?')[0]
-
-        # 2. 如果文字和清理后的链接相同, 则只返回清理后的链接
-        if link_text == clean_url:
-            return clean_url
-        # 否则, 返回 "文字 清理后的链接"
-        else:
-            return f'{link_text} {clean_url}'
+        return clean_url
 
     # 使用正则表达式查找所有 [文字](链接) 格式的链接
     return re.sub(r'\[([^\]]+)\]\(([^)]+)\)', replace_link, text)

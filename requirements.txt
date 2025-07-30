@@ -1,5 +1,7 @@
-python-dotenv
-telethon
+python-dotenv~=1.1.1
+telethon~=1.40.0
 discord.py
 pyyaml
 dataclasses-json
+selenium~=4.34.0
+discord~=2.3.2
