@@ -135,6 +135,29 @@ def load_config(config_path: str) -> Config:
         config_dict = yaml.safe_load(f)
     return Config.from_dict(config_dict)
 
+def update_gate_io_start_id(config_path: str, rule_name: str, new_start_id: int):
+    """更新config.yaml中Gate.io规则的start_id"""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config_dict = yaml.safe_load(f)
+        
+        # 查找并更新对应规则的start_id
+        for rule in config_dict.get('rules', []):
+            if rule.get('name') == rule_name and rule.get('source', {}).get('type') == 'gate_io':
+                old_start_id = rule['source'].get('start_id', 0)
+                rule['source']['start_id'] = new_start_id
+                logging.info(f"更新规则 '{rule_name}' 的start_id: {old_start_id} -> {new_start_id}")
+                
+                # 写回文件
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(config_dict, f, default_flow_style=False, allow_unicode=True, indent=2)
+                break
+        else:
+            logging.warning(f"未找到名为 '{rule_name}' 的Gate.io规则")
+            
+    except Exception as e:
+        logging.error(f"更新start_id时发生错误: {e}")
+
 def check_message_matches_filter(message_text: str, filter_config: Filter) -> bool:
     """检查消息是否匹配过滤器规则"""
     if filter_config.type == "ALL":
@@ -392,6 +415,14 @@ async def gate_io_monitor_task():
                         
                         for announcement in new_announcements:
                             await handle_gate_io_announcement(announcement, rule)
+                        
+                        # 如果有新公告，更新配置文件中的start_id
+                        if new_announcements:
+                            rule_id = rule.name
+                            latest_id = gate_io_last_checked.get(rule_id)
+                            if latest_id:
+                                update_gate_io_start_id('config.yaml', rule.name, latest_id)
+                                logging.info(f"已更新配置文件中规则 '{rule.name}' 的start_id为: {latest_id}")
                     
                     # 使用第一个Gate.io规则的检查间隔，或默认60秒
                     interval = gate_io_rules[0].source.check_interval or 60

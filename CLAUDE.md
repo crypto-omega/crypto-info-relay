@@ -58,6 +58,7 @@ pip install -r requirements.txt
 - **Error Handling**: Graceful handling of large files and network errors
 - **Session Management**: Persistent Telegram sessions with configurable paths
 - **Dual Platform Support**: Simultaneously forwards to Discord and Telegram destinations
+- **Auto-Update Start ID**: Automatically updates Gate.io `start_id` in config.yaml to prevent duplicate announcements on restart
 
 ## Logging and Debugging
 
@@ -94,3 +95,4 @@ Enable DEBUG mode to troubleshoot Gate.io announcement fetching issues.
 - Discord file size limits are handled with fallback error messages
 - All configuration is loaded at startup and cached globally
 - The bot handles both text messages and media attachments
+- **Gate.io Start ID Management**: The bot automatically updates the `start_id` in `config.yaml` after processing new announcements, ensuring no duplicate messages are sent when the program restarts

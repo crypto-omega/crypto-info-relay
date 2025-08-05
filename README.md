@@ -16,6 +16,7 @@ This bot forwards messages from specified Telegram channels to Discord channels 
 - Configurable filtering by keywords or regex patterns
 - Duplicate prevention with intelligent ID tracking
 - Configurable check intervals and starting announcement IDs
+- **Auto-Update Start ID**: Automatically updates `start_id` in config.yaml to prevent duplicate announcements on restart
 
 ### Technical Features
 - Unified async architecture for concurrent operations
@@ -105,6 +106,7 @@ The bot will:
 - Start monitoring configured Telegram channels
 - Begin Gate.io announcement checking (if configured)
 - Forward messages according to your rules
+- Automatically update Gate.io `start_id` in config.yaml after processing new announcements
 
 ### Logging Control
 **Normal operation** (INFO level and above):
