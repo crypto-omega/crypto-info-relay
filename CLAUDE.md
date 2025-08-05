@@ -59,6 +59,34 @@ pip install -r requirements.txt
 - **Session Management**: Persistent Telegram sessions with configurable paths
 - **Dual Platform Support**: Simultaneously forwards to Discord and Telegram destinations
 
+## Logging and Debugging
+
+### Log Level Control
+Control the verbosity of logging using the `DEBUG_MODE` environment variable:
+
+```bash
+# For verbose debugging (shows all DEBUG, INFO, WARNING, ERROR logs)
+DEBUG_MODE=true
+
+# For normal operation (shows only INFO, WARNING, ERROR logs)
+DEBUG_MODE=false
+```
+
+### Log Format
+Logs include function name and line number for easier debugging:
+```
+2024-01-01 12:00:00 - INFO - main:425 - 程序启动成功
+2024-01-01 12:00:01 - DEBUG - fetch_gate_io_announcement:248 - 正在获取Gate.io公告 46453
+```
+
+### Gate.io Task Logging
+The Gate.io monitoring task includes extensive logging:
+- **INFO level**: New announcements found, successful forwards, rule execution
+- **DEBUG level**: HTTP requests, HTML parsing, filter matching, destination processing
+- **ERROR level**: Network errors, parsing failures, forwarding errors
+
+Enable DEBUG mode to troubleshoot Gate.io announcement fetching issues.
+
 ## Important Notes
 
 - The bot uses Telegram user account mode (not bot mode) via Telethon

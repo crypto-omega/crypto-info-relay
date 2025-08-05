@@ -37,3 +37,40 @@ rules:
         channel_id: REPLACE_WITH_DISCORD_TRADE_CHANNEL_ID
       - type: "telegram"
         group_id: REPLACE_WITH_TELEGRAM_GROUP_ID
+
+  - name: "Gate.io公告转发规则"
+    source:
+      type: "gate_io"
+      start_id: 46452  # Starting announcement ID to check from
+      check_interval: 300  # Check every 5 minutes (300 seconds)
+    filters:
+      - type: "ALL"
+    destinations:
+      - type: "discord"
+        channel_id: REPLACE_WITH_DISCORD_CHANNEL_ID
+      - type: "telegram"
+        group_id: REPLACE_WITH_TELEGRAM_GROUP_ID
+
+  - name: "Gate.io空投公告过滤"
+    source:
+      type: "gate_io"
+      start_id: 46452
+      check_interval: 300
+    filters:
+      - type: "keywords"
+        words: ["空投", "奖励", "活动", "赠送"]
+    destinations:
+      - type: "discord"
+        channel_id: REPLACE_WITH_DISCORD_AIRDROP_CHANNEL_ID
+
+  - name: "Gate.io上币公告过滤"
+    source:
+      type: "gate_io"
+      start_id: 46452
+      check_interval: 300
+    filters:
+      - type: "regex"
+        pattern: "上线.*交易|新增.*交易对"
+    destinations:
+      - type: "discord"
+        channel_id: REPLACE_WITH_DISCORD_TRADE_CHANNEL_ID

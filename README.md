@@ -1,107 +1,151 @@
-# Telegram to Discord Message Forwarder
+# Crypto Message Forwarder
 
-This bot forwards messages from specified Telegram channels to a Discord channel. It can handle text messages, media, and has special filtering for airdrop and trade-related announcements. It can also forward filtered messages to a specified Telegram group.
+This bot forwards messages from specified Telegram channels to Discord channels with advanced filtering capabilities. It features a unified architecture that handles both Telegram message forwarding and Gate.io announcement monitoring in a single application. The bot supports text messages, media forwarding, and flexible rule-based filtering for different types of crypto announcements.
 
 ## Features
 
-- Forwards text and media from multiple Telegram channels.
-- Converts Telegram's Markdown links to plain URLs for better readability on Discord.
-- Filters messages containing keywords like "空投" (airdrop) and forwards them to a dedicated airdrop channel.
-- Filters messages about new perpetual contract listings and forwards them to a dedicated trading channel.
-- Forwards the filtered (airdrop/trade) messages to a specified Telegram group.
-- Handles large files by notifying about the failure instead of crashing.
-- Provides clear logging for monitoring and debugging.
--  Scrapes Gate.io official announcements and posts filtered results to Discord.
-- Filters announcements by keyword list (e.g., "gate alpha", "xstocks", "launchpool").
-- Supports proxy settings for accessing Gate.io with Selenium.
-- Avoids duplicate posts using a local cache file.
-- Only posts during specified hours (e.g., 08:00 to 24:00).
+### Telegram Message Forwarding
+- Forwards text and media from multiple Telegram channels
+- Converts Telegram's Markdown links to plain URLs for better Discord readability
+- Rule-based filtering with support for keywords, regex patterns, and "ALL" filters
+- Multi-destination support (Discord channels and Telegram groups)
+- Graceful handling of large files with fallback error messages
+
+### Gate.io Announcement Monitoring
+- Automated fetching of Gate.io official announcements
+- Configurable filtering by keywords or regex patterns
+- Duplicate prevention with intelligent ID tracking
+- Configurable check intervals and starting announcement IDs
+
+### Technical Features
+- Unified async architecture for concurrent operations
+- YAML-based configuration system for flexible rule management
+- Comprehensive logging with configurable verbosity levels
+- Session management for persistent Telegram connections
+- Error handling and automatic retry mechanisms
 
 
 ## Configuration
 
-Create a `.env` file in the root of the project and add the following environment variables:
+### Environment Variables
+Create a `.env` file in the root of the project with the required credentials:
 
 ```env
-# Telegram API credentials
+# Required: Telegram API credentials
 TELEGRAM_API_ID=your_telegram_api_id
 TELEGRAM_API_HASH=your_telegram_api_hash
-TELEGRAM_CHANNEL_IDS=channel_id_1, channel_id_2 # Can be numeric IDs or channel usernames
 
-# Discord Bot Token and Channel ID
+# Required: Discord Bot Token
 DISCORD_BOT_TOKEN=your_discord_bot_token
-DISCORD_CHANNEL_ID=your_discord_channel_id
 
-# Optional: Special channels for filtered messages
-DISCORD_AIRDROP_CHANNEL_ID=your_airdrop_discord_channel_id
-DISCORD_TRADE_CHANNEL_ID=your_trade_discord_channel_id
-
-# Optional: Telegram group to forward filtered messages
-DESTINATION_TELEGRAM_GROUP_ID=your_telegram_group_id
-
-# Optional: Path to save the telethon session file
-# Defaults to the current directory if not set
+# Optional: Telegram session file path (defaults to current directory)
 SESSION_PATH=/path/to/your/session/folder
 
-# Gate announcement scraper config
-DISCORD_ANNOUNCEMENTS_CHANNEL_ID=your_gate_announcement_channel_id
-KEYWORDS=gate alpha, xstocks, launchpool          # 🆕 comma-separated keywords to filter Gate announcements
+# Optional: Debug mode for verbose logging
+DEBUG_MODE=false
+```
 
-# Local cache file for preventing duplicate announcements
-DISCORD_SESSION_PATH=./sent_links.txt
+### YAML Configuration
+Copy `config.yaml.example` to `config.yaml` and customize your forwarding rules:
 
-# Proxy settings for Selenium (optional)
-USE_PROXY=true
-PROXY_HOST=127.0.0.1
-PROXY_PORT=7890
+```yaml
+rules:
+  - name: "General forwarding"
+    source:
+      type: "telegram"
+      channel_ids: [CHANNEL_ID_1, CHANNEL_ID_2]
+    filters:
+      - type: "ALL"  # Forward all messages
+    destinations:
+      - type: "discord"
+        channel_id: YOUR_DISCORD_CHANNEL_ID
 
+  - name: "Gate.io announcements"
+    source:
+      type: "gate_io"
+      start_id: 46452
+      check_interval: 300  # Check every 5 minutes
+    filters:
+      - type: "keywords"
+        words: ["空投", "奖励", "活动"]
+    destinations:
+      - type: "discord"
+        channel_id: YOUR_DISCORD_CHANNEL_ID
 ```
 
 ### How to get the credentials:
 
--   **Telegram:**
-    -   `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`: Obtain these from [my.telegram.org](https://my.telegram.org).
-    -   `TELEGRAM_CHANNEL_IDS`: For public channels, you can use the channel's username (e.g., `@channel_name`). For private channels, you'll need the channel's numeric ID.
-    -   `DESTINATION_TELEGRAM_GROUP_ID`: This is the numeric ID of the Telegram group you want to forward messages to. You can get this by adding a bot like `@userinfobot` to your group and it will show the group's ID.
+**Telegram:**
+- `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`: Obtain these from [my.telegram.org](https://my.telegram.org)
+- Channel IDs: For public channels, use the username (e.g., `@channel_name`). For private channels, use the numeric ID
+- Group IDs: Add a bot like `@userinfobot` to your group to get the numeric ID
 
--   **Discord:**
-    -   `DISCORD_BOT_TOKEN`: Create a new application and a bot on the [Discord Developer Portal](https://discord.com/developers/applications).
-    -   `DISCORD_CHANNEL_ID`, `DISCORD_AIRDROP_CHANNEL_ID`, `DISCORD_TRADE_CHANNEL_ID`: In Discord, right-click on the channel and select "Copy Channel ID". You might need to enable Developer Mode in your Discord settings first (Settings > Advanced > Developer Mode).
+**Discord:**
+- `DISCORD_BOT_TOKEN`: Create a new application and bot on the [Discord Developer Portal](https://discord.com/developers/applications)
+- Channel IDs: Right-click on channels and select "Copy Channel ID" (requires Developer Mode in Discord settings)
 
 ## Usage
 
-### Telegram-to-Discord Forwarder
-Once the setup and configuration are complete, run the bot with the following command:
+### Installation
+1. Ensure Python 3.7+ is installed
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Configure environment variables in `.env`
+4. Configure forwarding rules in `config.yaml`
 
+### Running the Bot
 ```bash
 python bot.py
 ```
 
-The bot will log in to both Telegram and Discord and start forwarding messages.
+The bot will:
+- Log in to both Telegram and Discord clients
+- Start monitoring configured Telegram channels
+- Begin Gate.io announcement checking (if configured)
+- Forward messages according to your rules
 
-### Gate.io Announcements Scraper
+### Logging Control
+**Normal operation** (INFO level and above):
 ```bash
-python discord_gate_bot.py
+DEBUG_MODE=false python bot.py
 ```
 
-### This will:
+**Verbose debugging** (DEBUG level and above):
+```bash
+DEBUG_MODE=true python bot.py
+```
 
-- Launch a headless Chrome browser via Selenium.
+### Configuration Examples
 
-- Scrape the latest Gate.io announcements periodically (default every 5 minutes).
+See `config.yaml.example` for detailed configuration examples including:
+- Multi-channel Telegram forwarding
+- Keyword-based filtering for airdrops
+- Regex filtering for trading announcements
+- Gate.io announcement monitoring
+- Multi-destination forwarding (Discord + Telegram)
 
-- Filter based on keywords.
+## Filter Types
 
-- Send matched announcements to a Discord channel.
+- **ALL**: Forward all messages from the source
+- **keywords**: Forward messages containing any of the specified words
+- **regex**: Forward messages matching the regex pattern
 
-- Avoid duplicate posts using a local cache file.
+## Source Types
 
-- Run only during configured hours (default: 08:00–24:00).
+- **telegram**: Monitor Telegram channels for new messages
+- **gate_io**: Monitor Gate.io announcements by ID range
 
-### **Additional Notes**
+## Destination Types
 
-- The Gate scraper uses Selenium with ChromeDriver. Make sure you have the correct version of ChromeDriver installed and available in your system PATH.
+- **discord**: Forward to Discord channels
+- **telegram**: Forward to Telegram groups
 
-- Proxy usage can be disabled by setting USE_PROXY=false.
+## Troubleshooting
 
-- ou can run both bots in parallel (e.g., in two separate terminal sessions or via tmux/supervisor).
+- Enable `DEBUG_MODE=true` for detailed logging
+- Check Telegram session file permissions in `SESSION_PATH`
+- Verify Discord bot permissions for target channels
+- Ensure Gate.io is accessible (check network/proxy settings)
+- Review `config.yaml` syntax for YAML formatting errors

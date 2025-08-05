@@ -11,16 +11,25 @@ from telethon import TelegramClient, events
 import discord
 from urllib.parse import urlparse
 from dataclasses_json import dataclass_json
-
-# --- 日志设置 ---
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+import aiohttp
+from bs4 import BeautifulSoup
+import json
 
 # --- 加载环境变量 ---
 load_dotenv()
+
+# --- 日志设置 ---
+# 从环境变量读取调试模式设置
+DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
+log_level = logging.DEBUG if DEBUG_MODE else logging.INFO
+
+logging.basicConfig(
+    level=log_level,
+    format='%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+logging.info(f"日志级别设置为: {'DEBUG' if DEBUG_MODE else 'INFO'}")
 logging.info("成功加载 .env 文件中的环境变量。")
 
 # --- TELEGRAM 设置 (用户账户模式) ---
@@ -33,10 +42,9 @@ if not all([TELEGRAM_API_ID, TELEGRAM_API_HASH]):
 
 # --- DISCORD 设置 ---
 DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-DISCORD_CHANNEL_ID_STR = os.getenv('DISCORD_CHANNEL_ID')
 
-if not all([DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID_STR]):
-    logging.error("一个或多个 Discord 环境变量缺失！请检查 .env 文件。")
+if not all([DISCORD_BOT_TOKEN]):
+    logging.error("Discord Bot Token 缺失！请检查 .env 文件。")
     exit()
 
 
@@ -89,7 +97,10 @@ def convert_markdown_links_to_plain_urls(text: str) -> str:
 @dataclass
 class Source:
     type: str
-    channel_ids: List[Union[int, str]]
+    channel_ids: Optional[List[Union[int, str]]] = None
+    url_pattern: Optional[str] = None
+    start_id: Optional[int] = None
+    check_interval: Optional[int] = None
 
 @dataclass_json
 @dataclass
@@ -146,6 +157,7 @@ def get_matching_destinations(message_text: str, rule: Rule) -> List[Destination
 CONFIG: Optional[Config] = None
 discord_client: Optional[discord.Client] = None
 telegram_client: Optional[TelegramClient] = None
+gate_io_last_checked: dict = {}  # Track last checked announcement ID for each rule
 
 # --- 消息处理函数 ---
 async def forward_to_discord(message_text: str, media_path: Optional[str], 
@@ -216,6 +228,8 @@ async def handle_new_telegram_message(event: events.NewMessage.Event) -> None:
 
     try:
         for rule in CONFIG.rules:
+            if rule.source.type != "telegram" or not rule.source.channel_ids:
+                continue
             if event.chat_id not in rule.source.channel_ids:
                 continue
 
@@ -231,6 +245,119 @@ async def handle_new_telegram_message(event: events.NewMessage.Event) -> None:
         if media_path and os.path.exists(media_path):
             os.remove(media_path)
             logging.info(f"清理临时文件: {media_path}")
+
+# --- Gate.io 公告处理函数 ---
+async def fetch_gate_io_announcement(session: aiohttp.ClientSession, announcement_id: int) -> Optional[dict]:
+    """获取单个Gate.io公告"""
+    url = f"https://www.gate.com/zh/announcements/article/{announcement_id}"
+    logging.debug(f"正在获取Gate.io公告 {announcement_id}: {url}")
+    
+    try:
+        async with session.get(url) as response:
+            logging.debug(f"Gate.io公告 {announcement_id} 响应状态: {response.status}")
+            
+            if response.status == 200:
+                html = await response.text()
+                logging.debug(f"成功获取公告 {announcement_id} 的HTML内容，长度: {len(html)}")
+                
+                soup = BeautifulSoup(html, 'html.parser')
+                title_element = soup.find('h3')
+                if title_element:
+                    title = title_element.get_text(strip=True)
+                    logging.debug(f"解析到公告 {announcement_id} 标题: {title}")
+                    return {
+                        'id': announcement_id,
+                        'title': title,
+                        'url': url
+                    }
+                else:
+                    logging.warning(f"未找到公告 {announcement_id} 的标题元素")
+                    logging.debug(f"公告 {announcement_id} HTML片段: {html[:500]}...")
+                    return None
+            elif response.status == 404:
+                logging.debug(f"公告 {announcement_id} 不存在 (404)")
+                return None
+            else:
+                logging.warning(f"获取公告 {announcement_id} 失败，状态码: {response.status}")
+                return None
+    except Exception as e:
+        logging.error(f"获取Gate.io公告 {announcement_id} 时发生错误: {e}")
+        logging.debug(f"公告 {announcement_id} 异常详情", exc_info=True)
+        return None
+
+async def check_gate_io_announcements(rule: Rule) -> List[dict]:
+    """检查Gate.io新公告"""
+    if rule.source.type != "gate_io":
+        logging.debug(f"规则 {rule.name} 不是Gate.io类型，跳过")
+        return []
+    
+    rule_id = rule.name
+    current_max_id = gate_io_last_checked.get(rule_id, rule.source.start_id or 46450)
+    new_announcements = []
+    
+    logging.info(f"开始检查Gate.io公告 - 规则: {rule_id}, 当前最大ID: {current_max_id}")
+    
+    async with aiohttp.ClientSession() as session:
+        # 检查从当前最大ID+1到当前最大ID+10的公告
+        check_range_start = current_max_id + 1
+        check_range_end = current_max_id + 11
+        logging.debug(f"检查ID范围: {check_range_start} 到 {check_range_end - 1}")
+        
+        for announcement_id in range(check_range_start, check_range_end):
+            logging.debug(f"检查公告ID: {announcement_id}")
+            announcement = await fetch_gate_io_announcement(session, announcement_id)
+            if announcement:
+                new_announcements.append(announcement)
+                gate_io_last_checked[rule_id] = announcement_id
+                logging.info(f"发现新公告 {announcement_id}: {announcement['title']}")
+            else:
+                logging.debug(f"公告ID {announcement_id} 不存在，停止检查更高ID")
+                break  # 如果当前ID不存在，停止检查更高的ID
+    
+    if new_announcements:
+        logging.info(f"规则 {rule_id} 找到 {len(new_announcements)} 个新公告")
+    else:
+        logging.debug(f"规则 {rule_id} 未找到新公告")
+    
+    return new_announcements
+
+async def handle_gate_io_announcement(announcement: dict, rule: Rule) -> None:
+    """处理Gate.io公告"""
+    title = announcement['title']
+    url = announcement['url']
+    announcement_id = announcement['id']
+    source_title = "Gate.io公告"
+    
+    message_text = f"**{title}**\n\n{url}"
+    
+    logging.info(f"处理Gate.io公告 {announcement_id}: {title}")
+    logging.debug(f"公告URL: {url}")
+    
+    # 检查是否匹配过滤器
+    destinations = get_matching_destinations(title, rule)
+    logging.debug(f"规则 {rule.name} 匹配到 {len(destinations)} 个目标")
+    
+    if not destinations:
+        logging.debug(f"公告 {announcement_id} 不匹配任何过滤器，跳过转发")
+        return
+    
+    for i, dest in enumerate(destinations):
+        logging.debug(f"处理目标 {i+1}/{len(destinations)}: {dest.type}")
+        
+        if dest.type == "discord" and dest.channel_id:
+            logging.debug(f"转发到Discord频道 {dest.channel_id}")
+            await forward_to_discord(message_text, None, dest.channel_id, source_title)
+        elif dest.type == "telegram" and dest.group_id:
+            # 对于Telegram，我们需要发送文本消息
+            logging.debug(f"转发到Telegram群组 {dest.group_id}")
+            try:
+                await telegram_client.send_message(dest.group_id, f"【{source_title}】\n\n{message_text}")
+                logging.info(f"[成功] Gate.io公告 {announcement_id} 已转发到 Telegram 群组 {dest.group_id}")
+            except Exception as e:
+                logging.error(f"[错误] 转发Gate.io公告 {announcement_id} 到 Telegram 群组 {dest.group_id} 时发生错误: {e}")
+                logging.debug(f"Telegram转发异常详情", exc_info=True)
+        else:
+            logging.warning(f"无效的目标配置: {dest}")
 
 # --- 初始化函数 ---
 async def initialize_clients():
@@ -273,6 +400,39 @@ async def initialize_clients():
 
     return True
 
+async def gate_io_monitor_task():
+    """Gate.io公告监控任务"""
+    logging.info("启动Gate.io公告监控任务")
+    
+    while True:
+        try:
+            if CONFIG:
+                gate_io_rules = [rule for rule in CONFIG.rules if rule.source.type == "gate_io"]
+                logging.debug(f"找到 {len(gate_io_rules)} 个Gate.io规则")
+                
+                if gate_io_rules:
+                    for rule in gate_io_rules:
+                        logging.debug(f"执行Gate.io规则: {rule.name}")
+                        new_announcements = await check_gate_io_announcements(rule)
+                        
+                        for announcement in new_announcements:
+                            await handle_gate_io_announcement(announcement, rule)
+                    
+                    # 使用第一个Gate.io规则的检查间隔，或默认60秒
+                    interval = gate_io_rules[0].source.check_interval or 60
+                    logging.debug(f"Gate.io监控任务等待 {interval} 秒后继续")
+                    await asyncio.sleep(interval)
+                else:
+                    logging.debug("没有Gate.io规则，等待60秒")
+                    await asyncio.sleep(60)  # 没有Gate.io规则时，等待60秒
+            else:
+                logging.warning("配置未加载，等待10秒后重试")
+                await asyncio.sleep(10)  # 如果配置未加载，等待10秒后重试
+        except Exception as e:
+            logging.error(f"Gate.io监控任务发生错误: {e}")
+            logging.debug("Gate.io监控任务异常详情", exc_info=True)
+            await asyncio.sleep(30)  # 出错后等待30秒再重试
+
 async def main():
     """主程序入口"""
     # 加载环境变量
@@ -301,10 +461,14 @@ async def main():
         await telegram_client.get_dialogs()
         logging.info("Telegram 对话列表已加载")
 
+        # 启动Gate.io监控任务
+        gate_io_task = asyncio.create_task(gate_io_monitor_task())
+        
         # 运行直到断开连接
         await asyncio.gather(
             discord_task,
-            telegram_client.run_until_disconnected()
+            telegram_client.run_until_disconnected(),
+            gate_io_task
         )
     except Exception as e:
         logging.error(f"运行时发生错误: {e}")
