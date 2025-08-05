@@ -31,19 +31,6 @@ if not all([TELEGRAM_API_ID, TELEGRAM_API_HASH]):
     logging.error("TELEGRAM_API_ID 或 TELEGRAM_API_HASH 缺失！请检查 .env 文件。")
     exit()
 
-DESTINATION_TELEGRAM_GROUP_ID_STR = os.getenv('DESTINATION_TELEGRAM_GROUP_ID')
-DESTINATION_TELEGRAM_GROUP_ID = None
-if DESTINATION_TELEGRAM_GROUP_ID_STR:
-    try:
-        DESTINATION_TELEGRAM_GROUP_ID = int(DESTINATION_TELEGRAM_GROUP_ID_STR)
-        logging.info(f"将要转发到的目标 Telegram 群组 ID: {DESTINATION_TELEGRAM_GROUP_ID}")
-    except ValueError:
-        logging.error("DESTINATION_TELEGRAM_GROUP_ID 格式错误。请确保它是一个纯数字。")
-        DESTINATION_TELEGRAM_GROUP_ID = None
-else:
-    logging.warning("DESTINATION_TELEGRAM_GROUP_ID 未设置，Telegram 群组转发功能将被禁用。")
-
-
 # --- DISCORD 设置 ---
 DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 DISCORD_CHANNEL_ID_STR = os.getenv('DISCORD_CHANNEL_ID')
@@ -51,40 +38,6 @@ DISCORD_CHANNEL_ID_STR = os.getenv('DISCORD_CHANNEL_ID')
 if not all([DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID_STR]):
     logging.error("一个或多个 Discord 环境变量缺失！请检查 .env 文件。")
     exit()
-
-try:
-    DISCORD_CHANNEL_ID = int(DISCORD_CHANNEL_ID_STR)
-    logging.info(f"将要转发到的 Discord 频道 ID: {DISCORD_CHANNEL_ID}")
-except ValueError:
-    logging.error("DISCORD_CHANNEL_ID 格式错误。请确保它是一个纯数字。")
-    exit()
-
-DISCORD_AIRDROP_CHANNEL_ID_STR = os.getenv('DISCORD_AIRDROP_CHANNEL_ID')
-
-if not DISCORD_AIRDROP_CHANNEL_ID_STR:
-    logging.warning("DISCORD_AIRDROP_CHANNEL_ID 未设置，空投频道转发功能将被禁用。")
-    DISCORD_AIRDROP_CHANNEL_ID = None
-else:
-    try:
-        DISCORD_AIRDROP_CHANNEL_ID = int(DISCORD_AIRDROP_CHANNEL_ID_STR)
-        logging.info(f"空投专用转发频道 ID: {DISCORD_AIRDROP_CHANNEL_ID}")
-    except ValueError:
-        logging.error("DISCORD_AIRDROP_CHANNEL_ID 格式错误。")
-        DISCORD_AIRDROP_CHANNEL_ID = None
-
-DISCORD_TRADE_CHANNEL_ID_STR = os.getenv('DISCORD_TRADE_CHANNEL_ID')
-
-if not DISCORD_TRADE_CHANNEL_ID_STR:
-    logging.warning("DISCORD_AIRDROP_CHANNEL_ID 未设置，空投频道转发功能将被禁用。")
-    DISCORD_TRADE_CHANNEL_ID = None
-else:
-    try:
-        DISCORD_TRADE_CHANNEL_ID = int(DISCORD_TRADE_CHANNEL_ID_STR)
-        logging.info(f"合约专用转发频道 ID: {DISCORD_TRADE_CHANNEL_ID}")
-    except ValueError:
-        logging.error("DISCORD_TRADE_CHANNEL_ID 格式错误。")
-        DISCORD_TRADE_CHANNEL_ID = None
-
 
 
 # --- 会话文件路径设置 (Session Path Setup) ---
@@ -106,12 +59,6 @@ telegram_client = TelegramClient(full_session_path, TELEGRAM_API_ID, TELEGRAM_AP
 intents = discord.Intents.default()
 intents.message_content = True 
 discord_client = discord.Client(intents=intents)
-
-
-# --- 重点字段 ----
-AIRDROP_FILTER_KEYWORDS = ["空投", "交易挑战", "瓜分"]
-PATTERN = r"上线.*永续合约"
-
 
 # --- 把 Markdown 链接转为裸链接 ----
 def convert_markdown_links_to_plain_urls(text: str) -> str:
