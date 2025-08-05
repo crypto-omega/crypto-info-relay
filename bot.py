@@ -160,8 +160,7 @@ telegram_client: Optional[TelegramClient] = None
 gate_io_last_checked: dict = {}  # Track last checked announcement ID for each rule
 
 # --- 消息处理函数 ---
-async def forward_to_discord(message_text: str, media_path: Optional[str], 
-                           channel_id: int, source_title: str) -> None:
+async def forward_to_discord(message_text: str, channel_id: int, source_title: str) -> None:
     """转发消息到Discord"""
     channel = discord_client.get_channel(channel_id)
     if not channel:
@@ -174,22 +173,6 @@ async def forward_to_discord(message_text: str, media_path: Optional[str],
         full_message = forward_header + convert_markdown_links_to_plain_urls(message_text)
         await channel.send(full_message)
         logging.info(f"[成功] 文本消息已转发到 Discord 频道 {channel_id}")
-
-    if media_path:
-        if not message_text:
-            await channel.send(forward_header)
-        try:
-            with open(media_path, 'rb') as f:
-                discord_file = discord.File(f)
-                await channel.send(file=discord_file)
-            logging.info(f"[成功] 媒体文件已转发到 Discord 频道 {channel_id}")
-        except discord.errors.HTTPException as e:
-            if e.status == 413:
-                file_size_mb = os.path.getsize(media_path) / (1024 * 1024)
-                logging.error(f"[错误] 文件转发失败！文件大小 ({file_size_mb:.2f} MB) 超过限制。")
-                await channel.send(f"**【转发失败】**\n来自 **{source_title}** 的文件过大，无法上传。")
-            else:
-                logging.error(f"[错误] 上传文件到 Discord 时发生 HTTP 错误: {e}")
 
 async def forward_to_telegram(message: events.NewMessage.Event, group_id: int) -> None:
     """转发消息到Telegram群组"""
@@ -218,13 +201,8 @@ async def handle_new_telegram_message(event: events.NewMessage.Event) -> None:
     else:
         source_title = f"ID: {event.chat_id}"
     message_text = event.message.text
-    media_path = None
 
     logging.info(f"收到来自 {source_title} 的新消息")
-
-    if event.message.media:
-        media_path = await event.message.download_media()
-        logging.info(f"媒体文件已下载到: {media_path}")
 
     try:
         for rule in CONFIG.rules:
@@ -236,15 +214,12 @@ async def handle_new_telegram_message(event: events.NewMessage.Event) -> None:
             destinations = get_matching_destinations(message_text or "", rule)
             for dest in destinations:
                 if dest.type == "discord" and dest.channel_id:
-                    await forward_to_discord(message_text, media_path, 
-                                          dest.channel_id, source_title)
+                    await forward_to_discord(message_text, dest.channel_id, source_title)
                 elif dest.type == "telegram" and dest.group_id:
                     await forward_to_telegram(event.message, dest.group_id)
 
     finally:
-        if media_path and os.path.exists(media_path):
-            os.remove(media_path)
-            logging.info(f"清理临时文件: {media_path}")
+        pass
 
 # --- Gate.io 公告处理函数 ---
 async def fetch_gate_io_announcement(session: aiohttp.ClientSession, announcement_id: int) -> Optional[dict]:
@@ -346,7 +321,7 @@ async def handle_gate_io_announcement(announcement: dict, rule: Rule) -> None:
         
         if dest.type == "discord" and dest.channel_id:
             logging.debug(f"转发到Discord频道 {dest.channel_id}")
-            await forward_to_discord(message_text, None, dest.channel_id, source_title)
+            await forward_to_discord(message_text, dest.channel_id, source_title)
         elif dest.type == "telegram" and dest.group_id:
             # 对于Telegram，我们需要发送文本消息
             logging.debug(f"转发到Telegram群组 {dest.group_id}")
