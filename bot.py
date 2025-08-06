@@ -21,6 +21,7 @@ load_dotenv()
 # --- 日志设置 ---
 # 从环境变量读取调试模式设置
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
+MAX_LEFT_ID = int(os.getenv('MAX_LEFT_ID', '4'))
 log_level = logging.DEBUG if DEBUG_MODE else logging.INFO
 
 logging.basicConfig(
@@ -301,6 +302,8 @@ async def check_gate_io_announcements(rule: Rule) -> List[dict]:
         check_range_end = current_max_id + 11
         logging.debug(f"检查ID范围: {check_range_start} 到 {check_range_end - 1}")
         
+        consecutive_missing = 0  # 连续缺失的公告数量
+        
         for announcement_id in range(check_range_start, check_range_end):
             logging.debug(f"检查公告ID: {announcement_id}")
             announcement = await fetch_gate_io_announcement(session, announcement_id)
@@ -308,9 +311,13 @@ async def check_gate_io_announcements(rule: Rule) -> List[dict]:
                 new_announcements.append(announcement)
                 gate_io_last_checked[rule_id] = announcement_id
                 logging.info(f"发现新公告 {announcement_id}: {announcement['title']}")
+                consecutive_missing = 0  # 重置连续缺失计数
             else:
-                logging.debug(f"公告ID {announcement_id} 不存在，停止检查更高ID")
-                break  # 如果当前ID不存在，停止检查更高的ID
+                consecutive_missing += 1
+                logging.debug(f"公告ID {announcement_id} 不存在，连续缺失: {consecutive_missing}/{MAX_LEFT_ID}")
+                if consecutive_missing >= MAX_LEFT_ID:
+                    logging.debug(f"连续缺失 {MAX_LEFT_ID} 个公告，停止检查更高ID")
+                    break
     
     if new_announcements:
         logging.info(f"规则 {rule_id} 找到 {len(new_announcements)} 个新公告")
